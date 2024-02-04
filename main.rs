@@ -54,10 +54,10 @@ fn ui_builder() -> impl Widget<AppState> {
             let resolution = &data.resolution;
 
             // Run the Python script
-            if let Ok(output) = run_python_script(stl_path, fov, resolution) {
+            if let Ok(output) = launch_python_script(stl_path, fov, resolution) {
                 data.processing_result = output;
             } else {
-                data.processing_result = String::from("Error running Python script");
+                data.processing_result = String::from("Error launching Python script");
             }
 
             ctx.request_update();
@@ -78,36 +78,36 @@ fn ui_builder() -> impl Widget<AppState> {
         .with_child(result_label)
 }
 
-fn run_python_script(stl_path: &str, fov: &str, resolution: &str) -> Result<String, std::io::Error> {
-    let python_script = r#"
-        import sys
-        import json
-        from stl_processing import process_stl
+fn launch_python_script(stl_path: &str, fov: &str, resolution: &str) -> Result<String, std::io::Error> {
+    let output = Arc::new(Mutex::new(String::new()));
 
-        if len(sys.argv) != 4:
-            print("Usage: python script.py <stl_path> <fov> <resolution>")
-            sys.exit(1)
+        let output_clone = output.clone();
+        let stl_path = stl_path.to_string();
+        let fov = fov.to_string();
+        let resolution = resolution.to_string();
 
-        stl_path = sys.argv[1]
-        fov = sys.argv[2]
-        resolution = sys.argv[3]
+        thread::spawn(move || {
+            let mut command = SysCommand::new("python")
+                .arg("stl_viewer.py")
+                .arg(&stl_path)
+                .arg(&fov)
+                .arg(&resolution)
+                .stdout(Stdio::piped())
+                .spawn()
+                .expect("Failed to start Python script");
 
-        result = process_stl(stl_path)
-        print(result)
-    "#;
+            let stdout = command.stdout.take().expect("Failed to open stdout");
+            let reader = BufReader::new(stdout);
 
-    let mut command = SysCommand::new("python")
-        .arg("-c")
-        .arg(python_script)
-        .arg(stl_path)
-        .arg(fov)
-        .arg(resolution)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
+            for line in reader.lines() {
+                let mut output = output_clone.lock().unwrap();
+                let line = line.expect("Failed to read line");
+                output.push_str(&line);
+                output.push('\n');
+            }
+        });
 
-    let mut output = String::new();
-    command.stdout.as_mut().unwrap().read_to_string(&mut output)?;
-
-    Ok(output)
+        // return output from python script
+        let output = output.lock().unwrap().clone();
+        Ok(output)
 }
